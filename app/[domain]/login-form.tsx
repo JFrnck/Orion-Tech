@@ -3,17 +3,17 @@
 import { useState } from 'react'
 import { createBrowserClient } from '@supabase/ssr'
 import { useRouter } from 'next/navigation'
-import { Loader2, AlertCircle } from 'lucide-react' // Asegúrate de tener lucide-react instalado
+import { Loader2, AlertCircle } from 'lucide-react'
+import { Database } from '@/types/supabase'
 
-export default function LoginForm({ colorMarca }: { colorMarca: string }) {
+export default function LoginForm({ colorMarca, domain }: { colorMarca: string, domain: string }) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const router = useRouter()
 
-  // Cliente Supabase para el navegador
-  const supabase = createBrowserClient(
+  const supabase = createBrowserClient<Database>(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   )
@@ -24,66 +24,65 @@ export default function LoginForm({ colorMarca }: { colorMarca: string }) {
     setError(null)
 
     try {
-      // 1. Intentar iniciar sesión (Auth Básico)
+      // 1. Autenticación (Email/Pass)
       const { data: { user }, error: authError } = await supabase.auth.signInWithPassword({
         email,
         password,
       })
 
-      if (authError) throw new Error('Credenciales inválidas, verifica tu correo y contraseña.')
-      if (!user) throw new Error('No se pudo identificar al usuario.')
+      if (authError) throw new Error('Credenciales inválidas.')
+      if (!user) throw new Error('Usuario no identificado.')
 
-      // ---------------------------------------------------------
-      // 2. LÓGICA DE CASCADA (Buscar el Rol en tus tablas reales)
-      // ---------------------------------------------------------
-
-      // A) ¿Es un DOCENTE o ADMIN?
-      // Buscamos en la tabla 'docentes' usando el ID del usuario autenticado
-      const { data: docente, error: errorDocente } = await supabase
-        .from('docentes')
-        .select('id, colegio_id') 
+      // 2. Obtener Perfil y Rol
+      const { data: perfil, error: perfilError } = await supabase
+        .from('perfiles')
+        .select('rol, colegio_id')
         .eq('id', user.id)
-        .maybeSingle() // Usamos maybeSingle para no lanzar error si no existe
+        .single()
 
-      if (docente) {
-        // ¡Es un profe! Redirigimos al panel administrativo/profesor
-        // Nota: Si tienes una lógica para distinguir "Admin" de "Profe", agrégala aquí.
-        // Por ahora, asumimos que los docentes van al admin o dashboard de profes.
-        router.push('/admin/dashboard') 
-        router.refresh()
-        return
+      if (perfilError || !perfil) {
+        throw new Error('No se encontró un perfil asociado a este usuario.')
       }
 
-      // B) ¿Es un ALUMNO?
-      const { data: alumno, error: errorAlumno } = await supabase
-        .from('alumnos')
-        .select('id, colegio_id')
-        .eq('id', user.id)
-        .maybeSingle()
+      // 3. Verificación de Seguridad: ¿Pertenece este usuario a este colegio?
+      const { data: colegioActual } = await supabase
+        .from('colegios')
+        .select('id')
+        .eq('subdominio', domain)
+        .single()
 
-      if (alumno) {
-        // ¡Es un alumno! Redirigimos a su plataforma
-        router.push('/aula/dashboard') // Ajusta esta ruta a tu app de alumnos
-        router.refresh()
-        return
+      // Si el rol NO es admin global Y el ID del colegio no coincide, bloqueamos el acceso
+      if (!colegioActual || (perfil.rol !== 'admin' && perfil.colegio_id !== colegioActual.id)) {
+        await supabase.auth.signOut() // Cerramos la sesión válida de Auth para no dejar "fantasmas"
+        throw new Error('Tu usuario no pertenece a esta institución.')
       }
 
-      // C) ¿Es un PADRE? (Si implementas la tabla padres a futuro)
-      /*
-      const { data: padre } = await supabase.from('padres').select('id').eq('id', user.id).maybeSingle()
-      if (padre) {
-          router.push('/portal/hijos')
-          return
+      // 4. Redirección basada en ROL (RUTAS LIMPIAS)
+      // Importante: Al estar ya dentro del subdominio gracias al middleware,
+      // NO debemos incluir '/[domain]' en la ruta. Usamos rutas relativas a la raíz.
+      switch (perfil.rol) {
+        case 'colegio': // Admin del colegio
+        case 'admin':   // SuperAdmin SaaS
+          router.push('/admin/dashboard') 
+          break
+        case 'docente':
+          router.push('/docente/dashboard') // Ajusta si tu ruta es diferente
+          break
+        case 'alumno':
+          router.push('/aula') // Ajusta si tu ruta es diferente
+          break
+        case 'padre':
+          router.push('/padres') // Ajusta si tu ruta es diferente
+          break
+        default:
+          router.push('/')
       }
-      */
 
-      // Si llegamos aquí, el usuario existe en Auth pero NO tiene perfil en ninguna tabla
-      await supabase.auth.signOut() // Cerramos sesión por seguridad
-      throw new Error('Tu usuario no tiene un perfil asignado (Alumno/Docente). Contacta al colegio.')
+      router.refresh()
 
     } catch (err: any) {
       console.error(err)
-      setError(err.message || 'Ocurrió un error inesperado')
+      setError(err.message || 'Error al iniciar sesión')
       setLoading(false)
     }
   }
@@ -95,11 +94,9 @@ export default function LoginForm({ colorMarca }: { colorMarca: string }) {
           <label htmlFor="email" className="sr-only">Correo electrónico</label>
           <input
             id="email"
-            name="email"
             type="email"
-            autoComplete="email"
             required
-            className="relative block w-full rounded-lg border-0 bg-slate-800 p-3 text-white placeholder-slate-400 shadow-sm ring-1 ring-inset ring-slate-700 focus:ring-2 focus:ring-inset sm:text-sm sm:leading-6 transition-all"
+            className="block w-full rounded-lg border-0 bg-slate-800 p-3 text-white placeholder-slate-400 ring-1 ring-slate-700 focus:ring-2 sm:text-sm transition-all"
             placeholder="usuario@colegio.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
@@ -110,11 +107,9 @@ export default function LoginForm({ colorMarca }: { colorMarca: string }) {
           <label htmlFor="password" className="sr-only">Contraseña</label>
           <input
             id="password"
-            name="password"
             type="password"
-            autoComplete="current-password"
             required
-            className="relative block w-full rounded-lg border-0 bg-slate-800 p-3 text-white placeholder-slate-400 shadow-sm ring-1 ring-inset ring-slate-700 focus:ring-2 focus:ring-inset sm:text-sm sm:leading-6 transition-all"
+            className="block w-full rounded-lg border-0 bg-slate-800 p-3 text-white placeholder-slate-400 ring-1 ring-slate-700 focus:ring-2 sm:text-sm transition-all"
             placeholder="Contraseña"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
@@ -124,7 +119,7 @@ export default function LoginForm({ colorMarca }: { colorMarca: string }) {
       </div>
 
       {error && (
-        <div className="flex items-center gap-2 rounded-lg bg-red-500/10 p-3 text-sm text-red-400 border border-red-500/20">
+        <div className="flex items-center gap-2 rounded-lg bg-red-500/10 p-3 text-sm text-red-400 border border-red-500/20 animate-in fade-in slide-in-from-top-1">
           <AlertCircle size={16} />
           <span>{error}</span>
         </div>
@@ -133,13 +128,13 @@ export default function LoginForm({ colorMarca }: { colorMarca: string }) {
       <button
         type="submit"
         disabled={loading}
-        className="group relative flex w-full justify-center rounded-lg px-3 py-3 text-sm font-semibold text-white shadow-md hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+        className="flex w-full justify-center rounded-lg px-3 py-3 text-sm font-semibold text-white shadow-md hover:opacity-90 disabled:opacity-50 transition-all"
         style={{ backgroundColor: colorMarca || '#2563EB' }}
       >
         {loading ? (
           <span className="flex items-center gap-2">
             <Loader2 className="animate-spin h-4 w-4" />
-            Ingresando...
+            Verificando...
           </span>
         ) : (
           'Iniciar Sesión'
