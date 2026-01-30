@@ -1,55 +1,56 @@
+// app/[domain]/page.tsx
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase"; 
+import LoginForm from "./login-form"; // <--- Importamos el componente cliente
 
 export default async function SchoolLoginPage({ params }: { params: { domain: string } }) {
-  // 1. Obtenemos el subdominio de la URL (ej: 'demo')
-  const { domain } = await params;
+  // 1. Obtenemos el subdominio
+  // Nota: En Next.js 15 'params' es una promesa, asegúrate de esperarla si usas la v15
+  // Si usas Next 14, quita el 'await' antes de params si te da error.
+  const { domain } = await params; 
 
-  // 2. Conectamos a Supabase para buscar el colegio
-  const supabase = createClient();
+  // 2. Conectamos a Supabase (Servidor)
+  const supabase = await createClient();
   
-  // CORRECCIÓN: Usamos 'colegios' (Español) en lugar de 'schools'
   const { data: colegio } = await supabase
-    .from('colegios') // Nombre correcto de la tabla
-    .select('nombre, logo_url, color_marca') // Columnas en español
-    .eq('subdominio', domain) // Columna en español
+    .from('colegios')
+    .select('nombre, logo_url, color_marca')
+    .eq('subdominio', domain)
     .single();
 
-  // 3. Si no existe el colegio, mostramos 404
   if (!colegio) {
     return notFound();
   }
 
-  // 4. Si existe, mostramos su Login personalizado
+  // Fallback por si el colegio no tiene color definido
+  const brandColor = colegio.color_marca || '#3B82F6';
+
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-slate-950 text-white">
       <div className="w-full max-w-md space-y-8 rounded-lg border border-slate-800 bg-slate-900 p-8 shadow-xl">
+        
+        {/* Encabezado: Logo y Nombre */}
         <div className="text-center">
-            {/* Logo o Icono */}
             {colegio.logo_url ? (
-                <img src={colegio.logo_url} alt={colegio.nombre} className="mx-auto h-20 w-auto" />
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={colegio.logo_url} alt={colegio.nombre} className="mx-auto h-24 w-auto object-contain" />
             ) : (
-                <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-slate-800 text-3xl">
+                <div className="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-slate-800 text-4xl">
                     🏫
                 </div>
             )}
             
-            {/* Nombre del Colegio (Dinámico) */}
-            <h2 className="mt-6 text-3xl font-extrabold" style={{ color: colegio.color_marca || '#3B82F6' }}>
+            <h2 className="mt-6 text-3xl font-extrabold" style={{ color: brandColor }}>
                 {colegio.nombre}
             </h2>
-            <p className="mt-2 text-sm text-slate-400">Panel de Acceso Institucional</p>
+            <p className="mt-2 text-sm text-slate-400">Plataforma de Gestión Escolar</p>
         </div>
 
-        {/* Placeholder del Formulario */}
-        <div className="mt-8 space-y-6">
-            <div className="rounded-md bg-blue-500/10 p-4 text-center text-blue-400 border border-blue-500/20">
-                Formulario de Login Próximamente
-            </div>
-            
-            <div className="text-center text-xs text-slate-500">
-              Sistema gestionado por OrionTech
-            </div>
+        {/* Formulario Interactivo (Client Component) */}
+        <LoginForm colorMarca={brandColor} />
+
+        <div className="text-center text-xs text-slate-600 mt-8">
+            Sistema seguro proporcionado por <span className="text-slate-500 font-semibold">OrionTech</span>
         </div>
       </div>
     </div>
